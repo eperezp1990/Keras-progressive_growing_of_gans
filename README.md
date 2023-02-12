@@ -7,7 +7,6 @@ This repository has been used as the baseline implementation for the manuscript 
 
 1. Python3 
 2. keras 2.1.2 (TensorFlow backend)
-3. [CelebA Dataset](http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)
 
 
 ## How to run (For other Users)
@@ -16,13 +15,7 @@ This repository has been used as the baseline implementation for the manuscript 
 
 ### 2. Prepare the dataset
 
-First download [CelebA Dataset](http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html).
-
 Run **h5tool.py** to create HDF5 format datatset. Default settings of **h5tool.py** will crop the picture to 512*512, and create a channel-last h5 file.
-
-```
-$ python3 h5tool.py create_celeba_channel_last <h5 file name> <CelebA directory>
-```
 
 Modify **config.py** to your own settings.
 
@@ -35,7 +28,6 @@ dataset = dict(h5_path=<h5 file name>, resolution=128, max_labels=0, mirror_augm
 # Note: "data_dir" should be set to the direcory of your h5 file.
 ```
 
-We only support CelebA dataset for now, you may need to modify the code in **dataset.py** and **h5tools.py** if you want to switch to another dataset.
 
 ### 3. Begin training
 ```
