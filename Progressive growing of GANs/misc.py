@@ -10,6 +10,8 @@ import numpy as np
 from collections import OrderedDict 
 import PIL.Image
 
+from skimage.io import imsave
+
 #----------------------------------------------------------------------------
 # Convenience wrappers for pickle.
 
@@ -52,6 +54,15 @@ def create_image_grid(images, grid_size=None):
         #print("grid.shape:",grid.shape)
         grid[y : y + img_h, x : x + img_w,...] = images[idx]
     return grid
+
+def back_to_pil(images, drange=[0,1]):
+    dev = []
+    for i in range(images.shape[0]):
+        image = images[i]
+        image = adjust_dynamic_range(image, drange, [0,255])
+        image = np.round(image).clip(0, 255).astype(np.uint8)
+        dev.append(image)
+    return np.asarray(dev)
 
 def convert_to_pil_image(image, drange=[0,1]):
     assert image.ndim == 2 or image.ndim == 3

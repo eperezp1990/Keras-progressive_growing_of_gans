@@ -14,6 +14,8 @@ import config
 
 import misc
 
+from multiprocessing import Pool
+
 def load_GD(path, compile = False):
     G_path = os.path.join(path,'Generator.h5')
     D_path = os.path.join(path,'Discriminator.h5')
@@ -128,6 +130,13 @@ def load_dataset(dataset_spec=None, verbose=True, **spec_overrides):
 
 speed_factor = 20
 
+def generate_batchs(G, latent_space_points, step=100):
+    dev = None
+    for i in range(0, len(latent_space_points), step):
+        new_one = G.predict_on_batch(latent_space_points[i:i+step])
+        dev = new_one if dev is None else np.vstack((dev, new_one))
+    return dev
+
 def train_gan(
     separate_funcs          = False,
     D_training_repeats      = 1,
@@ -161,10 +170,14 @@ def train_gan(
     #resume_network          = '000-celeba/network-snapshot-000488',
     resume_network          = None,
     resume_kimg             = 0.0,
-    resume_time             = 0.0):
+    resume_time             = 0.0,
+    name_augmented_file=None):
+
+    # epochs
+    total_kimg = 1200
+    print("total_kimg", total_kimg)
 
     training_set, drange_orig = load_dataset()
-
 
     if resume_network:
         print("Resuming weight from:"+resume_network)
@@ -229,18 +242,28 @@ def train_gan(
     else:
         raise ValueError('Invalid image_grid_type', image_grid_type)
 
+    # custom
+    custom_grid_size = (10,10) if np.prod(image_grid_size) > 100 else image_grid_size
 
     result_subdir = misc.create_result_subdir(config.result_dir, config.run_desc)
 
-
-
     print("example_real_images.shape:",example_real_images.shape)
-    misc.save_image_grid(example_real_images, os.path.join(result_subdir, 'reals.png'), drange=drange_orig, grid_size=image_grid_size)
+    if np.prod(image_grid_size) < 100:
+        misc.save_image_grid(example_real_images, os.path.join(result_subdir, 'reals.png'), drange=drange_orig, grid_size=image_grid_size)
+    else:
+        misc.save_image_grid(example_real_images[0:100], os.path.join(result_subdir, 'reals.png'), drange=drange_orig, grid_size=custom_grid_size)
+    # end custom
 
 
     snapshot_fake_latents = random_latents(np.prod(image_grid_size), G.input_shape)
-    snapshot_fake_images = G.predict_on_batch(snapshot_fake_latents)
-    misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
+    #snapshot_fake_images = G.predict_on_batch(snapshot_fake_latents)
+    snapshot_fake_images = generate_batchs(G, snapshot_fake_latents)
+
+    # custom
+    if np.prod(image_grid_size) < 100:
+        misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
+    else:
+        misc.save_image_grid(snapshot_fake_images[0:100], os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=custom_grid_size)
     
     nimg_h = 0
    
@@ -288,7 +311,8 @@ def train_gan(
                  mb_reals = np.repeat(mb_reals, 2**min_lod, axis=1)
                  mb_reals = np.repeat(mb_reals, 2**min_lod, axis=2)
 
-            mb_fakes = G.predict_on_batch([mb_latents])
+            #mb_fakes = G.predict_on_batch([mb_latents])
+            mb_fakes = generate_batchs(G, [mb_latents])
 
             epsilon = np.random.uniform(0, 1, size=(minibatch_size,1,1,1))
             interpolation = epsilon*mb_reals + (1-epsilon)*mb_fakes
@@ -330,8 +354,17 @@ def train_gan(
 
             # Visualize generated images.
             if cur_tick % image_snapshot_ticks == 0 or cur_nimg >= total_kimg * 1000:
-                snapshot_fake_images = G.predict_on_batch(snapshot_fake_latents)
-                misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
+                #snapshot_fake_images = G.predict_on_batch(snapshot_fake_latents)
+                snapshot_fake_images = generate_batchs(G, snapshot_fake_latents)
+                # custom 
+                if np.prod(image_grid_size) < 100:
+                    misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
+                else:
+                    misc.save_image_grid(snapshot_fake_images[0:100], os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=custom_grid_size)
+                # save augmented images
+                new_augmented_images = misc.back_to_pil(snapshot_fake_images)
+                np.save(name_augmented_file, new_augmented_images)
+
 
             if cur_tick % network_snapshot_ticks == 0 or cur_nimg >= total_kimg * 1000:
                 save_GD_weights(G,D,os.path.join(result_subdir, 'network-snapshot-%06d' % (cur_nimg / 1000)))
@@ -343,9 +376,44 @@ def train_gan(
 
 if __name__ == '__main__':
 
+    root_data = "/datasets"
+    
+    datasets = [i for i in os.listdir(root_data) if i.endswith(".h5")]
+    datasets.sort()
+
+    # config
     np.random.seed(config.random_seed)
     func_params = config.train
 
     func_name = func_params['func']
     del func_params['func']
-    globals()[func_name](**func_params)
+
+    def test(name):
+        print(name)
+        globals()[func_name]( 
+            **func_params, 
+            **{
+                "image_grid_size": image_grid_size,
+                "name_augmented_file": name_augmented_file
+            } 
+        )
+
+    for c_data in datasets:
+        
+        train_y = np.load( os.path.join(root_data, c_data.replace(".h5", "-Y.npy")) )
+
+        unique, counts = np.unique(train_y, return_counts=True)
+        number_augmented = np.abs(counts[0] - counts[1])
+        sqrt = int(np.sqrt(number_augmented)) + 1
+        image_grid_size = (sqrt, sqrt)
+
+        name_augmented_file = os.path.join(root_data, c_data.replace(".h5", "-X-aug.npy"))
+
+        # modify config
+        config.run_desc = c_data.split("-")[0]
+        config.dataset = dict(h5_path=os.path.join(root_data, c_data), resolution=512, max_labels=0, mirror_augment=True)
+
+        with Pool(processes=1) as pool:
+            start_time = time.time()
+            pool.map(test, [c_data])
+            print(time.time() - start_time)

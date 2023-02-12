@@ -19,6 +19,10 @@ import scipy.ndimage
 import PIL.Image
 import h5py # conda install h5py
 
+from sklearn.model_selection import StratifiedKFold
+from skimage.transform import resize
+from utils import segment_ChanVese, transform_training
+
 #----------------------------------------------------------------------------
 
 class HDF5Exporter:
@@ -190,39 +194,85 @@ class ThreadPool(object):
 
 #----------------------------------------------------------------------------
 
-def create_celeba_channel_last(h5_filename, celeba_dir, cx=89, cy=121):
-    print('Creating CelebA channel last dataset %s from %s' % (h5_filename, celeba_dir))
-    #glob_pattern = os.path.join(celeba_dir, 'img_align_celeba_png', '*.png')
-    glob_pattern = os.path.join(celeba_dir, '*.jpg')
-    image_filenames = sorted(glob.glob(glob_pattern))
-    num_images = 202599
-    print((len(image_filenames)))
-    test = []
-    for i in image_filenames:
-        a=i.split('/')[-1]
-        a=a.split('.')[0]
-        test.append(int(a))
-    for i in range(1,len(test)):
-        if(test[i]!=test[i-1]+1):
-            print((test[i-1],test[i]))
+def get_image(path, new_shape):
+    try:
+        img = np.asarray(PIL.Image.open(path))
+        img = resize(img, new_shape, 0)
+        img = img * 255
+        print("ok", path)
+        return img
+    except:
+        print("error in", path)
+        return None
 
-    if len(image_filenames) != num_images:
-        print('Error: Expected to find %d images in %s' % (num_images, glob_pattern))
-        return
-    
-    h5 = HDF5Exporter(h5_filename, 128, 3)
-    for idx in range(num_images):
-        print('%d / %d\r' % (idx, num_images), end=' ')
-        img = np.asarray(PIL.Image.open(image_filenames[idx]))
-        assert img.shape == (218, 178, 3)
-        img = img[cy - 64 : cy + 64, cx - 64 : cx + 64]
+def save_file_h5(h5_path, images, shape):
+    h5 = HDF5Exporter(h5_path, shape[0], 3)
+    for idx in range(len(images)):
+        img = images[idx]
+
+        # assert img.shape == (218, 178, 3)
+        # img = img[cy - 64 : cy + 64, cx - 64 : cx + 64]
         #img = img.transpose(2, 0, 1) # HWC => CHW
         h5.add_images_channel_last(img[np.newaxis])
 
     print('%-40s\r' % 'Flushing data...', end=' ')
     h5.close()
-    print('%-40s\r' % '', end=' ')
-    print('Added %d images.' % num_images)
+
+def create_custom_channel_last(root, output_root, new_shape=(512,512)):
+
+    datasets = os.listdir(root)
+    datasets.sort()
+
+    for data_name in datasets:
+
+        print("start", data_name)
+
+        x = [os.path.join(r,f) for r,d,files in os.walk( os.path.join(root,data_name) ) for f in files if "-nocluster" not in f]
+        x.sort()
+        
+        # load images only once
+        x = [ (get_image(i, new_shape), i) for i in x ]
+        # labels, benign = 0, 1 otherwise
+        y = np.asarray([ 0 if "benign" in p.split("/")[-2] else 1 for i, p in x if i is not None])
+        x = np.asarray( [ i for i, p in x if i is not None] )
+
+        # kfold
+        kfold = StratifiedKFold(n_splits=10, shuffle=True, random_state=7)
+        c_fold = -1
+        for train, test in kfold.split(x, y):
+            c_fold += 1
+
+            # stop earlier
+            if c_fold == 5:
+                break
+
+            # train
+            c_images = x[train]
+            c_y = y[train]
+
+            g_name = os.path.join(output_root, "-".join([data_name, str(new_shape[0]), str(c_fold)]) )
+
+            # select less represented class to augment in next phase
+            unique, counts = np.unique(c_y, return_counts=True)
+            less_label = unique[np.argmin(counts)]
+
+            c_images_train = c_images[ np.argwhere(c_y == less_label).flatten() ]
+            
+            save_file_h5( "-".join([g_name, "train.h5"]), c_images_train, new_shape)
+            
+            # all images model training
+            c_images = transform_training(c_images)
+            
+            np.save( "-".join([g_name, "train", "X.npy"]), c_images)
+            np.save( "-".join([g_name, "train", "Y.npy"]), c_y)
+
+            # test
+            c_images = x[test]
+            c_images = transform_training(c_images)
+            c_y = y[test]
+            
+            np.save( "-".join([g_name, "test", "X.npy"]), c_images)
+            np.save( "-".join([g_name, "test", "Y.npy"]), c_y)
 
 #----------------------------------------------------------------------------
 
@@ -255,11 +305,16 @@ def execute_cmdline(argv):
 
 #----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    execute_cmdline(sys.argv)
+# if __name__ == "__main__":
+#     execute_cmdline(sys.argv)
 
 
 #create_celeba_channel_last('datasets/celeba_128x128.h5', 'datasets/img_align_celeba', cx=89, cy=121)
 
+create_custom_channel_last(
+    '/datasets/01-classified-test',
+    '/datasets',
+    new_shape=(512,512) 
+)
 
 #----------------------------------------------------------------------------
